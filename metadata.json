@@ -1,5 +1,5 @@
 {
-  "name": "Legal Research & Analytics Platform",
+  "name": "For Lyno",
   "description": "An advanced, multi-dimensional legal research and empirical analysis platform for PhD candidates.",
   "requestFramePermissions": ["microphone"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
