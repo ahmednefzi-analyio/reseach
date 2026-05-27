@@ -1,6 +1,6 @@
 {
   "name": "Legal Research & Analytics Platform",
   "description": "An advanced, multi-dimensional legal research and empirical analysis platform for PhD candidates.",
-  "requestFramePermissions": [],
+  "requestFramePermissions": ["microphone"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

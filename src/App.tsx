@@ -36,7 +36,10 @@ import {
   X,
   FileSpreadsheet,
   Layers,
-  Info
+  Info,
+  Mic,
+  MicOff,
+  Volume2
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import {
@@ -55,6 +58,14 @@ import {
   Cell
 } from "recharts";
 
+interface SimulationData {
+  situation: string;
+  demandeur: string;
+  defendeur: string;
+  decision: string;
+  suggestions: string;
+}
+
 export default function App() {
   // Application State
   const [topicInput, setTopicInput] = useState("");
@@ -68,6 +79,18 @@ export default function App() {
   const [isCopied, setIsCopied] = useState(false);
   const [showRawJson, setShowRawJson] = useState(false);
 
+  // Voice Inputs & Recognition Error State
+  const [isRecordingTopic, setIsRecordingTopic] = useState(false);
+  const [isRecordingChat, setIsRecordingChat] = useState(false);
+  const [isRecordingSimulation, setIsRecordingSimulation] = useState(false);
+  const [speechError, setSpeechError] = useState<string | null>(null);
+
+  // Simulation State
+  const [simulationInput, setSimulationInput] = useState("");
+  const [isSimulating, setIsSimulating] = useState(false);
+  const [simulationResult, setSimulationResult] = useState<SimulationData | null>(null);
+  const [simulationActiveTab, setSimulationActiveTab] = useState<"position" | "decision" | "conseils">("position");
+
   // Doctrinal Friction Matrix Filters
   const [frictionSearch, setFrictionSearch] = useState("");
 
@@ -76,6 +99,7 @@ export default function App() {
   const [chatInput, setChatInput] = useState("");
   const [isChatLoading, setIsChatLoading] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const recognitionRef = useRef<any>(null);
 
   // Tour de rôle des légendes de chargement pour l'attention académique
   const readingCaptions = [
@@ -236,6 +260,170 @@ export default function App() {
     handleQuickChatQuery(textToSend);
   };
 
+  // Reusable Native Web Speech Recognition Dictation
+  const startSpeechRecognition = (target: "topic" | "chat" | "simulation") => {
+    // If we are already recording anything, act as a toggle off
+    if (isRecordingTopic || isRecordingChat || isRecordingSimulation) {
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.stop();
+        } catch (e) {
+          console.warn("Could not stop recognition:", e);
+        }
+      }
+      setIsRecordingTopic(false);
+      setIsRecordingChat(false);
+      setIsRecordingSimulation(false);
+      return;
+    }
+
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      setSpeechError("La reconnaissance vocale n'est pas supportée par votre navigateur actuel (recommandations : Chrome ou Safari). Sur mobile ou dans des cadres sécurisés, lancez l'application dans un nouvel onglet.");
+      return;
+    }
+
+    try {
+      const recognition = new SpeechRecognition();
+      recognitionRef.current = recognition;
+      recognition.continuous = false;
+      recognition.interimResults = false;
+      recognition.lang = "fr-FR";
+
+      if (target === "topic") setIsRecordingTopic(true);
+      if (target === "chat") setIsRecordingChat(true);
+      if (target === "simulation") setIsRecordingSimulation(true);
+      setSpeechError(null);
+
+      recognition.onresult = (event: any) => {
+        const text = event.results[0][0].transcript;
+        if (target === "topic") setTopicInput((prev) => (prev ? prev + " " + text : text));
+        if (target === "chat") setChatInput((prev) => (prev ? prev + " " + text : text));
+        if (target === "simulation") setSimulationInput((prev) => (prev ? prev + " " + text : text));
+      };
+
+      recognition.onerror = (event: any) => {
+        console.error("Speech recognition error:", event);
+        if (event.error === "not-allowed") {
+          setSpeechError("L'accès au microphone est restreint ou refusé par l'iframe de prévisualisation AI Studio. Veuillez ouvrir l'application dans un nouvel onglet autonome via l'icône dans l'angle supérieur droit pour activer la dictée en toute sécurité.");
+        } else {
+          setSpeechError(`Erreur d'écoute vocale (${event.error}). Ouvrez l'application dans un nouvel onglet.`);
+        }
+      };
+
+      recognition.onend = () => {
+        setIsRecordingTopic(false);
+        setIsRecordingChat(false);
+        setIsRecordingSimulation(false);
+        recognitionRef.current = null;
+      };
+
+      recognition.start();
+    } catch (e: any) {
+      console.error(e);
+      setSpeechError("Impossible de démarrer l'enregistreur vocal. Activez le certificat de sécurité ou ouvrez dans un nouvel onglet.");
+      setIsRecordingTopic(false);
+      setIsRecordingChat(false);
+      setIsRecordingSimulation(false);
+      recognitionRef.current = null;
+    }
+  };
+
+  // Parse structured simulation blocks from LLM output
+  const parseSimulationResponse = (text: string): SimulationData => {
+    const result: SimulationData = {
+      situation: "",
+      demandeur: "",
+      defendeur: "",
+      decision: "",
+      suggestions: ""
+    };
+
+    const getSection = (startTag: string, endTags: string[]): string => {
+      const startIdx = text.indexOf(startTag);
+      if (startIdx === -1) return "";
+      
+      let endIdx = text.length;
+      for (const endTag of endTags) {
+        const idx = text.indexOf(endTag, startIdx + startTag.length);
+        if (idx !== -1 && idx < endIdx) {
+          endIdx = idx;
+        }
+      }
+      
+      return text.substring(startIdx + startTag.length, endIdx).trim();
+    };
+
+    result.situation = getSection("[SITUATION]", ["[DEMANDEUR]", "[DÉFENDEUR]", "[DÉCISION DU CONSEIL / TRIBUNAL]", "[SUGGESTIONS ET DIRECTIVES DOCTORALES]"]);
+    result.demandeur = getSection("[DEMANDEUR]", ["[DÉFENDEUR]", "[DÉCISION DU CONSEIL / TRIBUNAL]", "[SUGGESTIONS ET DIRECTIVES DOCTORALES]"]);
+    result.defendeur = getSection("[DÉFENDEUR]", ["[DÉCISION DU CONSEIL / TRIBUNAL]", "[SUGGESTIONS ET DIRECTIVES DOCTORALES]"]);
+    result.decision = getSection("[DÉCISION DU CONSEIL / TRIBUNAL]", ["[SUGGESTIONS ET DIRECTIVES DOCTORALES]"]);
+    result.suggestions = getSection("[SUGGESTIONS ET DIRECTIVES DOCTORALES]", []);
+
+    // Fallback if formatting doesn't yield structured tags
+    if (!result.situation && !result.decision) {
+      result.situation = text;
+    }
+
+    return result;
+  };
+
+  // Generate Real-World Caselaw Simulation
+  const handleGenerateSimulation = async (scenarioText: string) => {
+    const trimmed = scenarioText.trim();
+    if (!trimmed || !activeDossier || isSimulating) return;
+
+    setIsSimulating(true);
+    setSpeechError(null);
+
+    const simulationPrompt = `Veuillez effectuer une simulation doctrinale approfondie et réaliste concernant la situation pratique suivante : "${trimmed}".
+Analysez précisément comment les cours souverraines (Cassation, Conseil d'État, CJUE ou tribunaux de Common Law) arbitreraient ce litige d'après les principes de la doctrine « ${activeDossier.topic} ».
+
+Vous DEVEZ structurer STRICTEMENT votre analyse en articulant votre réponse autour des balises suivantes (ne pas omettre de crochet ni modifier l'orthographe exacte des balises) :
+
+[SITUATION]
+Décrivez ici les faits du cas pratique, les forces opposées et la scission doctrinale en jeu.
+
+[DEMANDEUR]
+Exposez les prétentions et moyens de droit du demandeur (jurisprudence de référence, théories protectrices).
+
+[DÉFENDEUR]
+Exposez les arguments en réplique de la partie défenderesse (intérêts concurrents, clauses d'exclusion, exceptions réglementaires).
+
+[DÉCISION DU CONSEIL / TRIBUNAL]
+Rendez un verdict argumenté avec des motifs en droit très denses (la motivation finale devant trancher le litige de façon claire).
+
+[SUGGESTIONS ET DIRECTIVES DOCTORALES]
+Formulez des solutions pratiques et de recherche (évaluation des risques de conformité, propositions correctives doctrinales pour rééquilibrer le cadre).`;
+
+    try {
+      const response = await fetch("/api/deep-dive", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          topic: activeDossier.topic,
+          query: simulationPrompt,
+          dossierContext: activeDossier,
+          chatHistory: [] // independent clean state
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error("Impossible de générer la simulation judiciaire.");
+      }
+
+      const data = await response.json();
+      const parsed = parseSimulationResponse(data.text);
+      setSimulationResult(parsed);
+      setSimulationActiveTab("position");
+    } catch (err: any) {
+      console.error(err);
+      setSpeechError(err.message || "Une erreur s'est produite lors du calcul de la simulation.");
+    } finally {
+      setIsSimulating(false);
+    }
+  };
+
   // Delete Dossier from Saved History
   const handleDeleteDossier = (e: React.MouseEvent, topicToDelete: string) => {
     e.stopPropagation();
@@ -315,7 +503,34 @@ ${activeDossier.emergingFrictionPoints
 ${activeDossier.academicSyntheses}
 `;
 
-    navigator.clipboard.writeText(mk);
+    try {
+      navigator.clipboard.writeText(mk);
+    } catch (err) {
+      console.warn("Clipboard write failed or restricted in iframe:", err);
+    }
+
+    // Physical .md Report File Download
+    try {
+      const blob = new Blob([mk], { type: "text/markdown;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      const cleanTopic = activeDossier.topic
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "") // remove French accents
+        .replace(/[^a-z0-9]/gi, "-")
+        .replace(/-+/g, "-")
+        .replace(/^-|-$/g, "");
+      link.href = url;
+      link.download = `rapport-doctrinal-${cleanTopic || "rapport-doctrinal"}.md`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("Failed to trigger file download:", err);
+    }
+
     setIsCopied(true);
     setTimeout(() => setIsCopied(false), 2000);
   };
@@ -445,20 +660,39 @@ ${activeDossier.academicSyntheses}
                       value={topicInput}
                       onChange={(e) => setTopicInput(e.target.value)}
                       placeholder="ex. Brevets essentiels et licences FRAND selon l'article 102 du TFUE..."
-                      className="w-full bg-[#E4E3E0] border border-[#141414] py-3 pl-4 pr-12 focus:outline-none focus:ring-1 focus:ring-[#141414] focus:bg-white text-xs font-mono text-[#141414] rounded-none transition"
+                      className="w-full bg-[#E4E3E0] border border-[#141414] py-3 pl-4 pr-24 focus:outline-none focus:ring-1 focus:ring-[#141414] focus:bg-white text-xs font-mono text-[#141414] rounded-none transition"
                       onKeyDown={(e) => {
                         if (e.key === "Enter") handleGenerateResearch(topicInput);
                       }}
                     />
-                    <button
-                      onClick={() => handleGenerateResearch(topicInput)}
-                      disabled={!topicInput.trim()}
-                      className="absolute right-2.5 top-2 bg-[#141414] text-white p-1.5 hover:bg-[#333333] disabled:opacity-35 transition flex items-center justify-center cursor-pointer"
-                      title="Analyser le Sujet"
-                    >
-                      <ArrowRight className="w-4 h-4" />
-                    </button>
+                    <div className="absolute right-2.5 top-2 flex items-center gap-1.5">
+                      <button
+                        onClick={() => startSpeechRecognition("topic")}
+                        className={`p-1.5 border border-[#141414] transition flex items-center justify-center cursor-pointer ${
+                          isRecordingTopic 
+                            ? "bg-red-600 animate-pulse text-white hover:bg-red-700" 
+                            : "bg-white text-[#141414] hover:bg-[#E4E3E0]"
+                        }`}
+                        title={isRecordingTopic ? "Dictée en cours... Cliquez pour arrêter" : "Dicter le sujet de recherche (Assistant de Voix)"}
+                      >
+                        {isRecordingTopic ? <MicOff className="w-3.5 h-3.5" /> : <Mic className="w-3.5 h-3.5" />}
+                      </button>
+                      <button
+                        onClick={() => handleGenerateResearch(topicInput)}
+                        disabled={!topicInput.trim()}
+                        className="bg-[#141414] text-white p-1.5 hover:bg-[#333333] disabled:opacity-35 transition flex items-center justify-center cursor-pointer border border-[#141414]"
+                        title="Analyser le Sujet"
+                      >
+                        <ArrowRight className="w-4 h-4" />
+                      </button>
+                    </div>
                   </div>
+                  {speechError && (
+                    <div className="text-red-750 font-mono text-[10px] bg-white border border-red-700/30 p-2 flex items-center gap-2">
+                      <AlertTriangle className="w-3.5 h-3.5" />
+                      <span>{speechError}</span>
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -613,7 +847,249 @@ ${activeDossier.academicSyntheses}
 
         {/* Dossier Workspace Grid (Active Dossier Loaded) */}
         {activeDossier && !isLoading && (
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 animate-fade-in">
+          <div className="space-y-6 animate-fade-in">
+            
+            {/* 1. Header Banner: Return to Home & Create New Research */}
+            <div className="bg-white border border-[#141414] p-4 flex flex-col sm:flex-row items-center justify-between gap-4 rounded-none shadow-sm text-left">
+              <div className="flex items-center gap-2.5">
+                <span className="w-2.5 h-2.5 bg-emerald-700 rounded-full animate-pulse" />
+                <div>
+                  <h3 style={{ fontFamily: "Georgia, serif" }} className="text-sm font-bold text-[#141414] italic">
+                    Dossier de Recherche : {activeDossier.topic}
+                  </h3>
+                  <p className="text-[10px] font-mono uppercase tracking-widest text-zinc-500 mt-0.5">
+                    Conseiller Doctoral Connecteur // Faculté Élite active
+                  </p>
+                </div>
+              </div>
+
+              <button
+                onClick={() => {
+                  setActiveDossier(null);
+                  setTopicInput("");
+                  setSimulationInput("");
+                  setSimulationResult(null);
+                }}
+                className="px-4 py-2 bg-[#141414] hover:bg-zinc-800 text-white font-mono text-[9px] uppercase tracking-widest font-extrabold transition-all flex items-center gap-2 cursor-pointer w-full sm:w-auto justify-center rounded-none"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Nouvelle recherche / Retour à l'accueil</span>
+              </button>
+            </div>
+
+            {/* 2. Real-World Case Simulation Chamber (SimLyno Room) */}
+            <div className="bg-white border border-[#141414] p-5 sm:p-6 text-left relative overflow-hidden rounded-none shadow-sm">
+              <span className="text-[8px] uppercase font-mono tracking-widest font-extrabold bg-[#141414] text-white px-2.5 py-1 block w-fit mb-3">
+                CHAMBRE DE SIMULATION RÉELLE // SIMLYNO
+              </span>
+              
+              <div className="flex flex-col md:flex-row items-start justify-between gap-4 border-b border-[#141414]/15 pb-3 mb-4">
+                <div>
+                  <h3 style={{ fontFamily: "Georgia, serif" }} className="text-lg font-bold italic text-[#141414]">
+                    Simuler une Situation Réelle Pratique
+                  </h3>
+                  <p className="text-xs text-zinc-650 font-serif italic leading-relaxed max-w-2xl mt-1">
+                    Traduisez une situation litigieuse ou des faits commerciaux empiriques pour évaluer comment les instances réglementaires et les doctrines académiques du dossier arbitreraient ce conflit de souveraineté.
+                  </p>
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="text-[9px] font-mono tracking-widest bg-zinc-200 text-zinc-700 px-2 py-0.5 uppercase">
+                    MOTEUR DE DROIT COMPARÉ
+                  </span>
+                </div>
+              </div>
+
+              {/* Presets to quickly simulate */}
+              <div className="space-y-2 mb-4">
+                <span className="text-[8px] font-mono font-bold uppercase tracking-widest text-zinc-500 block">
+                  Scénarios types à simuler (Cliquez pour injecter)
+                </span>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  {[
+                    {
+                      label: "Barrières logicielles antitrust",
+                      text: "Une multinationale opérant un système fermé d'applications restreint les passerelles de developpement tiers, invoquant la cyber-sécurité alors que la concurrence dénonce un abus de position dominante caractérisé."
+                    },
+                    {
+                      label: "Friction de territorialité Cloud",
+                      text: "Un tribunal de l'Union Européenne exige l'extraction immédiate de correspondances cryptées stockées aux États-Unis, déclenchant un conflit diplomatique de réciprocité légale et de souveraineté numérique."
+                    },
+                    {
+                      label: "Cartellisation de standards d'IA",
+                      text: "Trois groupements d'innovation d'IA signent un pacte de retenue technologique, refusant de distribuer leurs modèles aux instituts publics sous prétexte de respect du droit d'auteur de premier rang."
+                    }
+                  ].map((preset, pIdx) => (
+                    <button
+                      key={pIdx}
+                      onClick={() => setSimulationInput(preset.text)}
+                      className="border border-[#141414]/20 hover:border-[#141414] bg-[#E4E3E0]/20 hover:bg-[#E4E3E0]/40 p-2.5 text-left text-[11px] font-serif italic text-zinc-800 transition rounded-none cursor-pointer flex flex-col justify-between"
+                    >
+                      <span className="font-mono text-[9px] uppercase tracking-wider font-extrabold text-[#141414] not-italic mb-1">
+                        {preset.label}
+                      </span>
+                      <span className="line-clamp-2">{preset.text}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Custom input panel with speech options */}
+              <div className="space-y-3">
+                <label className="text-[9px] font-mono uppercase tracking-wider font-extrabold opacity-75 block">
+                  Description du Cas Pratique / Litige de Test
+                </label>
+                
+                <div className="relative">
+                  <textarea
+                    rows={3}
+                    value={simulationInput}
+                    onChange={(e) => setSimulationInput(e.target.value)}
+                    placeholder="Saisissez ou dictez les détails d'un cas de conflit pratique..."
+                    className="w-full bg-[#E4E3E0] border border-[#141414] p-3 text-xs font-mono text-[#141414] rounded-none focus:bg-white focus:outline-none focus:ring-1 focus:ring-[#141414] transition pr-28 pb-10"
+                  />
+                  
+                  {/* Speech Dictation control overlayed securely */}
+                  <div className="absolute right-3.5 bottom-3 text-right flex items-center gap-1.5 bg-transparent p-0.5">
+                    <button
+                      type="button"
+                      onClick={() => startSpeechRecognition("simulation")}
+                      className={`p-1.5 border border-[#141414] transition-all flex items-center justify-center cursor-pointer ${
+                        isRecordingSimulation
+                          ? "bg-red-600 animate-pulse text-white font-bold"
+                          : "bg-white text-[#141414] hover:bg-[#E4E3E0]"
+                      }`}
+                      title={isRecordingSimulation ? "Enregistrement vocal actif. Cliquez pour arrêter." : "Dicter vocalement la situation (Assistant Micro Simu)"}
+                    >
+                      {isRecordingSimulation ? <MicOff className="w-3.5 h-3.5" /> : <Mic className="w-3.5 h-3.5" />}
+                    </button>
+                    
+                    <button
+                      onClick={() => handleGenerateSimulation(simulationInput)}
+                      disabled={isSimulating || !simulationInput.trim()}
+                      className="px-4 py-1.5 bg-[#141414] text-white border border-[#141414] hover:bg-zinc-800 disabled:opacity-35 text-[9px] font-mono uppercase tracking-widest font-extrabold flex items-center gap-1.5 cursor-pointer"
+                    >
+                      {isSimulating ? (
+                        <>
+                          <span className="w-2.5 h-2.5 border-t border-white border-2 rounded-full animate-spin shrink-0 block" />
+                          <span>Simulation...</span>
+                        </>
+                      ) : (
+                        <>
+                          <span>Lancer la Simulation</span>
+                          <ArrowRight className="w-3 h-3" />
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+
+                {speechError && (
+                  <div className="text-red-750 font-mono text-[10px] bg-red-50 border border-red-700/20 p-2 flex items-center gap-1.5">
+                    <AlertTriangle className="w-3.5 h-3.5" />
+                    <span>{speechError}</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Simulation Result Presentation with dedicated tab sub-system */}
+              <AnimatePresence>
+                {simulationResult && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="mt-6 border border-[#141414] bg-[#E4E3E0]/10 flex flex-col rounded-none"
+                  >
+                    {/* Horizontal sub-tabs for simulation components */}
+                    <div className="border-b border-[#141414] flex flex-wrap bg-[#E4E3E0]/50 divide-x divide-[#141414]">
+                      {[
+                        { id: "position", label: "Positions Divergentes (Proces vs Defense)" },
+                        { id: "decision", label: "Sentence de la Cour (Verdict)" },
+                        { id: "conseils", label: "Suggestions de Correction (IA)" }
+                      ].map((sub) => (
+                        <button
+                          key={sub.id}
+                          onClick={() => setSimulationActiveTab(sub.id as any)}
+                          className={`flex-1 py-2.5 px-3 font-mono text-[9px] uppercase tracking-wider font-extrabold text-center transition-all cursor-pointer ${
+                            simulationActiveTab === sub.id
+                              ? "bg-[#141414] text-white"
+                              : "text-[#141414] hover:bg-[#E4E3E0]"
+                          }`}
+                        >
+                          {sub.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    <div className="p-5 text-xs">
+                      {/* Active Subtab content */}
+                      {simulationActiveTab === "position" && (
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                          {/* Prosecution claim */}
+                          <div className="p-4 bg-white border border-[#141414]/80 text-left">
+                            <span className="text-[8px] font-mono bg-zinc-800 text-white px-2 py-0.5 uppercase tracking-wide font-extrabold inline-block mb-2">
+                              DEMANDEUR // LES RETENSIONS DE DROIT
+                            </span>
+                            <p className="font-serif italic leading-relaxed text-zinc-800 text-[12px] whitespace-pre-wrap">
+                              {simulationResult.demandeur || "Analyse en attente..."}
+                            </p>
+                          </div>
+
+                          {/* Defense claim */}
+                          <div className="p-4 bg-white border border-[#141414]/80 text-left">
+                            <span className="text-[8px] font-mono bg-zinc-800 text-white px-2 py-0.5 uppercase tracking-wide font-extrabold inline-block mb-1.5">
+                              DÉFENDEUR // LES MOYENS EN RÉPLIQUE
+                            </span>
+                            <p className="font-serif italic leading-relaxed text-zinc-800 text-[12px] whitespace-pre-wrap">
+                              {simulationResult.defendeur || "Analyse en attente..."}
+                            </p>
+                          </div>
+                        </div>
+                      )}
+
+                      {simulationActiveTab === "decision" && (
+                        <div className="p-5 bg-white border border-[#141414] text-left space-y-3">
+                          <div className="flex items-center justify-between pb-2 border-b border-[#141414]/10">
+                            <span className="text-[8px] font-mono bg-[#141414] text-white px-2.5 py-1 font-bold tracking-widest uppercase">
+                              MOTIVATION ET DISPOSITIF DU VERDICT SOUVERAIN
+                            </span>
+                            <span className="text-[10px] font-mono italic opacity-60">
+                              Simulé d'après la Grundnorm doctrinale
+                            </span>
+                          </div>
+                          
+                          <p className="font-serif leading-relaxed text-[12.5px] italic text-[#141414] whitespace-pre-wrap">
+                            {simulationResult.decision || "Calcul de la décision souverraine en cours..."}
+                          </p>
+
+                          <div className="border border-[#141414] p-3 bg-zinc-50 relative mt-4">
+                            <span className="font-mono text-[8px] font-bold text-zinc-500 block uppercase mb-1">
+                              Rappel des faits simulés :
+                            </span>
+                            <p className="font-serif text-[11px] text-zinc-650 italic">
+                              {simulationResult.situation}
+                            </p>
+                          </div>
+                        </div>
+                      )}
+
+                      {simulationActiveTab === "conseils" && (
+                        <div className="p-4 bg-white border border-[#141414] text-left space-y-3">
+                          <span className="text-[8px] font-mono bg-[#141414] text-white px-2 py-0.5 tracking-wider font-extrabold inline-block mb-1">
+                            SUGGESTIONS ET CORRECTIFS STRATÉGIQUES ÉLABORÉS PAR L'IA
+                          </span>
+                          
+                          <div className="font-sans leading-relaxed text-zinc-805 text-[11px] whitespace-pre-wrap pl-1">
+                            {simulationResult.suggestions || "Aucune suggestion à afficher pour le moment."}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
             
             {/* Left Column: Stats Context & Dialogue Assistant */}
             <div className="lg:col-span-4 space-y-6 flex flex-col h-full">
@@ -673,16 +1149,16 @@ ${activeDossier.academicSyntheses}
                 </div>
               </div>
 
-              {/* Scholar dialogue assistant formatted with monospace, high density */}
+              {/* Scholar dialogue assistant: LynoChat formatted with monospace, high density */}
               <div className="bg-white border border-[#141414] p-5 flex flex-col flex-1 min-h-[460px] max-h-[580px] rounded-none">
                 <div className="flex items-center gap-2 pb-3 border-b border-[#141414] text-left">
-                  <Cpu className="text-[#141414] w-4.5 h-4.5" />
+                  <Cpu className="text-emerald-700 w-4.5 h-4.5 animate-pulse shrink-0" />
                   <div>
                     <h3 className="font-mono text-xs font-bold uppercase tracking-widest text-[#141414]">
-                      Dialogue Doctrinal
+                      LynoChat
                     </h3>
                     <p className="text-[10px] text-zinc-500 font-mono">
-                      Conseiller de Thèse Interactif // [v4.0]
+                      Conseiller de Thèse & Suggestions d'IA // [v4.0]
                     </p>
                   </div>
                 </div>
@@ -692,9 +1168,9 @@ ${activeDossier.academicSyntheses}
                   {chatMessages.length === 0 ? (
                     <div className="text-center py-10 px-3 border border-dashed border-[#141414]/30 bg-[#E4E3E0]/10 text-xs">
                       <HelpCircle className="w-5 h-5 text-zinc-400 mx-auto mb-2" />
-                      <p className="font-mono uppercase tracking-widest font-bold text-[9px]">Espace de Dialogue Inactif</p>
+                      <p className="font-mono uppercase tracking-widest font-bold text-[9px]">Espace de Dialogue LynoChat</p>
                       <p className="text-[11px] italic font-serif mt-1 opacity-75 leading-relaxed">
-                        Échangez avec votre directeur de thèse virtuel. Posez des questions de fond ou lancez un déclencheur analytique ci-dessous.
+                        Échangez en temps réel avec le conseiller de recherche. Utilisez le micro pour dicter vos interrogations juridiques à voix haute.
                       </p>
                     </div>
                   ) : (
@@ -706,7 +1182,7 @@ ${activeDossier.academicSyntheses}
                         }`}
                       >
                         <div
-                          className={`p-3 text-[11px] font-mono leading-relaxed text-left ${
+                          className={`p-3 text-[11px] font-mono leading-relaxed text-left max-w-full ${
                             msg.sender === "user"
                               ? "bg-[#141414] text-white rounded-none border border-[#141414]"
                               : "bg-[#F4F3F0] text-[#141414] border border-[#141414] rounded-none font-serif italic"
@@ -715,66 +1191,87 @@ ${activeDossier.academicSyntheses}
                           <p className="whitespace-pre-wrap">{msg.text}</p>
                         </div>
                         <span className="text-[8px] font-mono uppercase tracking-wider opacity-60">
-                          {msg.sender === "user" ? "Candidat" : "Conseiller Doctoral"} • {msg.timestamp}
+                          {msg.sender === "user" ? "Candidat (Vous)" : "Directeur LynoChat"} • {msg.timestamp}
                         </span>
                       </div>
                     ))
                   )}
 
                   {isChatLoading && (
-                    <div className="flex items-center gap-2 text-zinc-600 py-1 font-mono text-[10px]">
+                    <div className="flex items-center gap-2 text-zinc-650 py-1 font-mono text-[10px]">
                       <span className="inline-block w-1.5 h-1.5 rounded-full bg-[#141414] animate-bounce" />
                       <span className="inline-block w-1.5 h-1.5 rounded-full bg-[#141414] animate-bounce [animation-delay:0.2s]" />
                       <span className="inline-block w-1.5 h-1.5 rounded-full bg-[#141414] animate-bounce [animation-delay:0.4s]" />
-                      <span className="italic font-serif">Analyse doctrinale approfondie...</span>
+                      <span className="italic font-serif font-bold">Le conseiller affine sa suggestion...</span>
                     </div>
                   )}
                   <div ref={chatEndRef} />
                 </div>
 
                 {/* Quick prompt catalysts with high contrast labels */}
-                <div className="space-y-2 pt-3 border-t border-[#141414]/15 flex flex-col">
-                  <span className="text-[8px] font-mono font-bold uppercase tracking-widest opacity-60 text-left">
-                    Déclencheurs d'analyses contextuelles
+                <div className="space-y-2 pt-3 border-t border-[#141414]/15 flex flex-col text-left">
+                  <span className="text-[8px] font-mono font-bold uppercase tracking-widest opacity-60">
+                    Séquences Doctrinales & Suggestions de données
                   </span>
-                  <div className="flex flex-wrap gap-1">
-                    {[
-                      "Proposer des axes de recherche de thèse",
-                      "Rédiger une fiche de synthèse de conformité",
-                      "Lister les théories contradictoires de la doctrine"
-                    ].map((sQuery, idx) => (
-                      <button
-                        key={idx}
-                        disabled={isChatLoading}
-                        onClick={() => handleQuickChatQuery(`Éminent chercheur, concernant le sujet du dossier de recherche actuel, ${sQuery.toLowerCase()}`)}
-                        className="text-[9px] font-mono uppercase tracking-tight bg-white hover:bg-[#F2F1EE] border border-[#141414] py-1 px-2 hover:text-[#141414] transition-colors rounded-none text-left cursor-pointer"
-                      >
-                        {sQuery}
-                      </button>
-                    ))}
+                  <div className="grid grid-cols-1 gap-1">
+                    <button
+                      disabled={isChatLoading}
+                      onClick={() => handleQuickChatQuery(`Éminent chercheur, concernant le sujet '${activeDossier.topic}' actuellement examiné dans la section ${activeTab.toUpperCase()}, veuillez analyser les implications analytiques des données présentes et me formuler trois suggestions complémentaires précises.`)}
+                      className="text-[9.5px] font-mono uppercase tracking-tight bg-[#E4E3E0]/35 hover:bg-[#E4E3E0]/75 border border-[#141414]/40 py-1.5 px-2.5 transition-colors rounded-none text-left cursor-pointer font-bold flex items-center justify-between"
+                    >
+                      <span>📊 Suggestions sur la vue active: [{activeTab.toUpperCase()}]</span>
+                      <ArrowRight className="w-2.5 h-2.5 shrink-0 ml-1.5" />
+                    </button>
+                    <button
+                      disabled={isChatLoading}
+                      onClick={() => handleQuickChatQuery(`Éminent chercheur, veuillez me proposer des suggestions d'amendements ou d'extensions de recherche doctorale basés sur les scissions de jurisprudence et les points de friction découverts.`)}
+                      className="text-[9.5px] font-mono uppercase tracking-tight bg-white hover:bg-[#F2F1EE] border border-[#141414]/40 py-1.5 px-2.5 transition-colors rounded-none text-left cursor-pointer font-bold flex items-center justify-between"
+                    >
+                      <span>💡 Suggestions correctives & Extensions de Thèse</span>
+                      <ArrowRight className="w-2.5 h-2.5 shrink-0 ml-1.5" />
+                    </button>
                   </div>
                 </div>
 
                 {/* Dialogue Submission block */}
-                <form onSubmit={handleChatSubmit} className="mt-3.5">
-                  <div className="relative">
-                    <input
-                      type="text"
-                      value={chatInput}
-                      onChange={(e) => setChatInput(e.target.value)}
-                      placeholder="Soumettre une question doctrinale au conseiller..."
-                      disabled={isChatLoading}
-                      className="w-full bg-[#E4E3E0] border border-[#141414] hover:bg-white focus:bg-white focus:outline-none focus:ring-1 focus:ring-[#141414] py-2 pl-3 pr-10 text-xs font-mono text-[#141414] rounded-none transition-colors"
-                    />
+                <form onSubmit={handleChatSubmit} className="mt-3.5 relative">
+                  <input
+                    type="text"
+                    value={chatInput}
+                    onChange={(e) => setChatInput(e.target.value)}
+                    placeholder="Soumettre une question doctrinale à LynoChat..."
+                    disabled={isChatLoading}
+                    className="w-full bg-[#E4E3E0] border border-[#141414] hover:bg-white focus:bg-white focus:outline-none focus:ring-1 focus:ring-[#141414] py-2.5 pl-3 pr-20 text-xs font-mono text-[#141414] rounded-none transition"
+                  />
+                  <div className="absolute right-1 top-1 flex items-center gap-1.5 bg-transparent h-[34px] pr-1.5">
+                    <button
+                      type="button"
+                      onClick={() => startSpeechRecognition("chat")}
+                      className={`p-1 border border-[#141414]/30 transition flex items-center justify-center cursor-pointer ${
+                        isRecordingChat 
+                          ? "bg-red-650 animate-pulse text-white" 
+                          : "bg-white text-[#141414] hover:bg-[#E4E3E0]"
+                      }`}
+                      title={isRecordingChat ? "Dictée en cours... Cliquez pour figer" : "Dicter votre question à haute voix (Assistant Micro)"}
+                    >
+                      {isRecordingChat ? <MicOff className="w-3.5 h-3.5" /> : <Mic className="w-3.5 h-3.5" />}
+                    </button>
                     <button
                       type="submit"
                       disabled={isChatLoading || !chatInput.trim()}
-                      className="absolute right-1 top-1 text-[#141414] p-1.5 disabled:opacity-30 cursor-pointer"
+                      className="text-[#141414] p-1 disabled:opacity-30 cursor-pointer flex items-center justify-center"
+                      title="Transmettre à l'IA"
                     >
                       <Send className="w-3.5 h-3.5" />
                     </button>
                   </div>
                 </form>
+
+                {speechError && (
+                  <div className="text-red-750 font-mono text-[9px] bg-red-50 border border-red-200 p-1.5 mt-1.5 text-left font-bold">
+                    {speechError}
+                  </div>
+                )}
 
               </div>
             </div>
@@ -1319,6 +1816,7 @@ ${activeDossier.academicSyntheses}
 
             </div>
 
+          </div>
           </div>
         )}
 
