@@ -62,16 +62,18 @@ Vous devez impérativement répondre aux questions du candidat en FRANÇAIS trè
 Gardez vos réponses concises mais exceptionnellement analytiques (environ 2 ou 3 paragraphes denses), avec une profondeur clinique et académique maximale. Évitez les formules de politesse superficielles ou le remplissage conversationnel.
 ${compiledContext}`;
 
-    const formattedHistory = (chatHistory || []).map((msg: any) => ({
-      role: msg.sender === "user" ? "user" : "model",
-      parts: [{ text: msg.text }]
-    }));
+    const formattedHistory = (chatHistory || [])
+      .filter((msg: any) => msg.id !== "welcome")
+      .map((msg: any) => ({
+        role: msg.sender === "user" ? "user" : "model",
+        parts: [{ text: msg.text }]
+      }));
 
     const response = await ai.models.generateContent({
       model: "gemini-3.5-flash",
       contents: [
         ...formattedHistory,
-        { text: `Candidate Query: "${query.trim()}"` }
+        { role: "user", parts: [{ text: `Candidate Query: "${query.trim()}"` }] }
       ],
       config: {
         systemInstruction,
