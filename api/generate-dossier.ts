@@ -40,7 +40,7 @@ export default async function handler(req: any, res: any) {
   }
 
   try {
-    const { topic } = req.body;
+    const { topic, afnorMode } = req.body;
     if (!topic || typeof topic !== "string" || !topic.trim()) {
       res.status(400).json({ error: "A valid legal topic, doctrine, or case title is required." });
       return;
@@ -48,11 +48,34 @@ export default async function handler(req: any, res: any) {
 
     const ai = getGeminiClient();
 
-    const systemPrompt = `Vous êtes un universitaire éminent en droit, un scientifique des données juridiques et un analyste chevronné des cours suprêmes.
+    let systemPrompt = `Vous êtes un universitaire éminent en droit, un scientifique des données juridiques et un analyste chevronné des cours suprêmes.
 Générez un dossier académique extrêmement rigoureux et approfondi sur le sujet de recherche fourni.
 IMPORTANT : L'intégralité du contenu généré (les descriptions, analyses, scénarios hypothétiques, titres de conflits, etc.) DOIT être rédigée en FRANÇAIS littéraire, académique et très soutenu, adapté à un candidat en doctorat (Ph.D.).
 Conservez strictement la structure et les clés JSON de l'objet en anglais comme requis par le schéma, mais toutes les explications textuelles et les valeurs de chaînes de caractères complexes doivent être formulées en français juridique de haut niveau.
-Fournissez des données empiriques et synthétiques réalistes qui illustrent parfaitement le sujet sous forme de tendances et de mesures régionales. (Note : les clés du schéma JSON doivent rester en anglais pour des raisons de conformité technique).`;
+Fournissez des données empiriques et synthétiques réalistes qui illustrent parfaitement le sujet sous forme de tendances et de mesures régionales. (Note : les clés du schéma JSON doivent rester en anglais pour des raisons de conformité technique).
+
+[EXIGENCE MAJEURE : LIENS ET SOURCES INTERNET CLIQUEBLES]
+Pour chaque information importante, arrêt judiciaire, doctrine, principe ou loi mentionné dans l'un des paragraphes ou champs du rapport (notamment "jurisprudentialNexus", "academicSyntheses", "doctrinalFrictionPoints", "emergingFrictionPoints", "chronologicalEvolution"), vous devez impérativement ajouter un lien hypertexte markdown cliquable [Titre précis de la ressource](URL) pointant vers l'accès en ligne officiel ou de recherche (Légifrance, EUR-Lex, Conseil d'État, Cour de cassation, Google Scholar).
+- Exemples de formats de liens acceptables :
+  - Recherche doctrinale : [L'œuvre de Jean Rivero sur l'autorité administrative](https://scholar.google.com/scholar?q=Jean+Rivero+jurisprudence+administrative)
+  - Textes officiels Légifrance : [Article 1101 du Code civil](https://www.legifrance.gouv.fr/codes/article_lc/LEGIARTI000032006555)
+  - Arrêts notables : [CE Ass. 17 fév. 1950, Dame Lamotte](https://www.legifrance.gouv.fr/search/juri?query=Conseil+d+Etat+17+fevrier+1950+Dame+Lamotte)
+Insérez de façon organique ces liens hypertextes. L'objectif est d'assurer une exhaustivité et une certitude académique absolue à l'utilisateur, qui doit pouvoir cliquer sur toutes les sources mentionnées.`;
+
+    if (afnorMode) {
+      systemPrompt += `
+
+[CONGÉ ACADÉMIQUE : EXIGENCE STRICTE NORME AFNOR NF Z 44-005]
+Le candidat a activé l'exigence absolue de la NORME AFNOR NF Z 44-005 française pour tous les rapports et textes produits.
+Vous devez impérativement :
+1. Structurer vos analyses textuelles de façon extrêmement formelle et universitaire, idéalement avec un plan décimal ou alphanumérique très clair (par ex: 1.1., I.A.1., etc. incorporés dans les textes complexes comme jurisprudentialNexus et academicSyntheses).
+2. Rédiger les références jurisprudentielles et bibliographiques selon le formalisme AFNOR strict. Exemple d'ouvrage académique : AUTEUR (NOM en majuscule, Initiale du Prénom). Titre de l'ouvrage en italique. Lieu d'édition : Éditeur, Année, pages.
+Exemples obligatoires : 
+MAZEAUD, H. et L. Leçons de droit civil. Paris : Montchrestien, 1996, p. 124.
+DUBOUIS, L. et GUYOMAR, M. Grands arrêts du droit public. Paris : Sirey, 2021, p. 55.
+3. Pour les arrêts judiciaires, citer de façon uniforme : Juridiction, Date (ex: Cass. civ., 3e ch., 12 mai 2021, n° 19-21.512), Recueil de publication (ou JORF).
+4. Rédiger tout de manière exhaustive, épurée, hautement universitaire et structurée avec des alinéas soignés.`;
+    }
 
     const response = await ai.models.generateContent({
       model: "gemini-3.5-flash",
@@ -84,7 +107,7 @@ Fournissez des données empiriques et synthétiques réalistes qui illustrent pa
             },
             jurisprudentialNexus: {
               type: Type.STRING,
-              description: "A highly sophisticated, rigorous 2-paragraph analysis of the philosophical, jurisprudential (e.g., positivism, realism, critical legal studies) and constitutional underpinnings of the topic."
+              description: "A highly sophisticated, rigorous 2-paragraph analysis of the philosophical, jurisprudential and constitutional underpinnings. You MUST embed at least 2 key source links formatted as [Label/Source](URL) (e.g. specialized Légifrance, EUR-Lex, or Google Scholar) to substantiate your facts."
             },
             doctrinalFrictionPoints: {
               type: Type.ARRAY,
@@ -94,9 +117,9 @@ Fournissez des données empiriques et synthétiques réalistes qui illustrent pa
                 required: ["pillar", "conflict", "precedent", "critique"],
                 properties: {
                   pillar: { type: Type.STRING, description: "Doctrinal pillar or governing statute." },
-                  conflict: { type: Type.STRING, description: "Detailed structural tension or split of authority." },
-                  precedent: { type: Type.STRING, description: "Leading judicial precedent(s) or administrative rules." },
-                  critique: { type: Type.STRING, description: "Advanced academic/PhD scholarly critiques of this tension." }
+                  conflict: { type: Type.STRING, description: "Detailed structural tension or split of authority. Embed at least 1 clickable Markdown source link [Nom de la Loi/Traité](URL)." },
+                  precedent: { type: Type.STRING, description: "Leading judicial precedent(s) or administrative rules. Embed at least 1 clickable Markdown source link pointing to the official judgment or publication [Nom de l'Arrêt](URL)." },
+                  critique: { type: Type.STRING, description: "Advanced academic/PhD scholarly critiques of this tension. Embed at least 1 clickable Markdown source link [Doctrine de Nom d'Auteur](URL) pointing to the scholarship on Google Scholar." }
                 }
               }
             },
@@ -114,7 +137,7 @@ Fournissez des données empiriques et synthétiques réalistes qui illustrent pa
                     enum: ["Paradigm Shift", "Legislative Catalyst", "Judicial Milestone", "Doctrinal Pivot"]
                   },
                   title: { type: Type.STRING, description: "Brief title of the evolution step/shift." },
-                  description: { type: Type.STRING, description: "A rigorous explanation of the legal transition and its structural effect on compliance/jurisprudence." }
+                  description: { type: Type.STRING, description: "A rigorous explanation of the legal transition and its structural effect on compliance/jurisprudence. MUST embed at least 1 clickable markdown link of the relevant law, decree, or ruling [Texte officiel de Loi / Arrêt](URL)." }
                 }
               }
             },
@@ -172,14 +195,14 @@ Fournissez des données empiriques et synthétiques réalistes qui illustrent pa
                 required: ["jurisdictionName", "regulatoryFramework", "extraterritorialReach", "fundamentalPhilosophy", "modernFriction"],
                 properties: {
                   jurisdictionName: { type: Type.STRING, description: "E.g., 'United States (Delaware/Federal)', 'EU (Council/Parliament)'." },
-                  regulatoryFramework: { type: Type.STRING, description: "Leading statutes, directives, or constitutional provisions." },
+                  regulatoryFramework: { type: Type.STRING, description: "Leading statutes, directives, or constitutional provisions. You MUST embed at least 1 clickable Markdown source link [Cadre Réglementaire](URL) pointing to Légifrance, EUR-Lex or other official library." },
                   extraterritorialReach: {
                     type: Type.STRING,
                     description: "Level of external claim of authority.",
                     enum: ["Low", "Medium", "High"]
                   },
-                  fundamentalPhilosophy: { type: Type.STRING, description: "Jurisprudential doctrine (e.g. Rights-centric, laissez-faire, state interventionist)." },
-                  modernFriction: { type: Type.STRING, description: "The single most potent modern compliance hurdle or corporate pain point." }
+                  fundamentalPhilosophy: { type: Type.STRING, description: "Jurisprudential doctrine. You MUST embed at least 1 clickable Markdown source link [Tradition Doctrinale / Philosophie](URL)." },
+                  modernFriction: { type: Type.STRING, description: "The single most potent modern compliance hurdle or corporate pain point. You MUST embed at least 1 clickable Markdown source link [Friction de Conformité](URL)." }
                 }
               }
             },
@@ -192,19 +215,19 @@ Fournissez des données empiriques et synthétiques réalistes qui illustrent pa
                 properties: {
                   title: { type: Type.STRING, description: "E.g., 'The Smart-Contract Sovereignty Crisis' or 'Quantum-Era Cryptographic Standard Disputes'." },
                   category: { type: Type.STRING, description: "E.g., 'Computational Autonomy', 'Statutory Obsolescence'." },
-                  scholarlyThesis: { type: Type.STRING, description: "An open research thesis prompt suited for a doctoral dissertation." },
+                  scholarlyThesis: { type: Type.STRING, description: "An open research thesis prompt suited for a doctoral dissertation. You MUST embed at least 1 clickable academic Google Scholar / reference repository link [Sujet de recherche doctoral](URL)." },
                   disruptionLevel: {
                     type: Type.STRING,
                     description: "Urgency and level of system-wide disruption.",
                     enum: ["Critical", "High", "Medium"]
                   },
-                  hypotheticalScenario: { type: Type.STRING, description: "A concrete hypothetical litigation scenario modeling this clash of law." }
+                  hypotheticalScenario: { type: Type.STRING, description: "A concrete hypothetical litigation scenario modeling this clash of law. You MUST embed at least 1 clickable legal precedent link [Scénario Analogue](URL)." }
                 }
               }
             },
             academicSyntheses: {
               type: Type.STRING,
-              description: "A summary meta-analysis suggesting three (3) highly innovative academic research methodology blueprints for a PhD dissertation on this topic."
+              description: "A summary meta-analysis suggesting three (3) highly innovative academic research methodology blueprints for a PhD dissertation on this topic. You MUST embed at least 3 distinct clickable reference links [Modèle de Recherche / Guide Méthodologique](URL)."
             }
           }
         }

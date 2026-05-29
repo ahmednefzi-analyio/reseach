@@ -39,7 +39,8 @@ import {
   Info,
   Mic,
   MicOff,
-  Volume2
+  Volume2,
+  ExternalLink
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import {
@@ -66,14 +67,93 @@ interface SimulationData {
   suggestions: string;
 }
 
+interface TextWithLinksProps {
+  text: string;
+  afnorMode?: boolean;
+}
+
+function TextWithLinks({ text, afnorMode }: TextWithLinksProps) {
+  if (!text) return null;
+
+  const regex = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g;
+  const elements: React.ReactNode[] = [];
+  let lastIndex = 0;
+  let match;
+  const localRegex = new RegExp(regex);
+  let keyCounter = 0;
+
+  while ((match = localRegex.exec(text)) !== null) {
+    const matchIndex = match.index;
+    const matchLength = match[0].length;
+
+    if (matchIndex > lastIndex) {
+      elements.push(
+        <span key={`txt-${keyCounter++}`}>
+          {text.slice(lastIndex, matchIndex)}
+        </span>
+      );
+    }
+
+    const label = match[1];
+    const url = match[2];
+
+    elements.push(
+      <a
+        key={`lnk-${keyCounter++}`}
+        href={url}
+        target="_blank"
+        referrerPolicy="no-referrer"
+        rel="noopener noreferrer"
+        className="text-[#7c3aed] dark:text-[#a78bfa] font-extrabold hover:underline inline-flex items-center gap-0.5 mx-0.5 transition hover:text-[#5b21b6] dark:hover:text-[#c084fc]"
+        id={`src-link-${keyCounter}`}
+        onClick={(e) => e.stopPropagation()}
+        title={`Ouvrir la source officielle : ${url}`}
+      >
+        {label}
+        <ExternalLink className="w-3 h-3 inline shrink-0 opacity-80" />
+      </a>
+    );
+
+    lastIndex = matchIndex + matchLength;
+  }
+
+  if (lastIndex < text.length) {
+    elements.push(
+      <span key={`txt-${keyCounter++}`}>
+        {text.slice(lastIndex)}
+      </span>
+    );
+  }
+
+  return <>{elements}</>;
+}
+
 export default function App() {
   // Application State
   const [topicInput, setTopicInput] = useState("");
+  const [afnorMode, setAfnorMode] = useState<boolean>(() => {
+    try {
+      const stored = localStorage.getItem("afnor_mode_active");
+      return stored === "true";
+    } catch {
+      return false;
+    }
+  });
+
+  const toggleAfnorMode = (active: boolean) => {
+    setAfnorMode(active);
+    try {
+      localStorage.setItem("afnor_mode_active", String(active));
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   const [activeDossier, setActiveDossier] = useState<LegalDossier | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [loadingStep, setLoadingStep] = useState(0);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<"nexus" | "friction" | "timeline" | "empirical" | "comparative" | "emerging">("nexus");
+  const [activeTab, setActiveTab] = useState<"nexus" | "friction" | "timeline" | "empirical" | "comparative" | "emerging" | "sources">("nexus");
   const [savedDossiers, setSavedDossiers] = useState<LegalDossier[]>([]);
   const [searchHistoryQuery, setSearchHistoryQuery] = useState("");
   const [isCopied, setIsCopied] = useState(false);
@@ -100,6 +180,79 @@ export default function App() {
   const [isChatLoading, setIsChatLoading] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<any>(null);
+
+  // Dynamic extracted links aggregate from dossier and chat history
+  const extractedLinks = useMemo(() => {
+    if (!activeDossier) return [];
+
+    const linkRegex = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g;
+    const linksMap = new Map<string, { label: string; url: string; category: string; count: number }>();
+
+    const addLink = (label: string, url: string, category: string) => {
+      const key = `${label}|||${url}`;
+      if (linksMap.has(key)) {
+        const item = linksMap.get(key)!;
+        item.count += 1;
+      } else {
+        linksMap.set(key, { label, url, category, count: 1 });
+      }
+    };
+
+    const extractFromText = (text: string | null | undefined, category: string) => {
+      if (!text) return;
+      let match;
+      const regex = new RegExp(linkRegex);
+      while ((match = regex.exec(text)) !== null) {
+        addLink(match[1], match[2], category);
+      }
+    };
+
+    // Extract from Dossier text fields
+    extractFromText(activeDossier.jurisprudentialNexus, "Nexus Doctrinal");
+    extractFromText(activeDossier.academicSyntheses, "Directives de Thèse");
+    
+    // Doctrinal Friction Points
+    if (Array.isArray(activeDossier.doctrinalFrictionPoints)) {
+      activeDossier.doctrinalFrictionPoints.forEach((pt) => {
+        extractFromText(pt.conflict, "Points de Friction");
+        extractFromText(pt.precedent, "Points de Friction");
+        extractFromText(pt.critique, "Points de Friction");
+      });
+    }
+
+    // Emerging Friction Points
+    if (Array.isArray(activeDossier.emergingFrictionPoints)) {
+      activeDossier.emergingFrictionPoints.forEach((pt) => {
+        extractFromText(pt.hypotheticalScenario, "Axes & Hypothèses");
+        extractFromText(pt.scholarlyThesis, "Axes & Hypothèses");
+      });
+    }
+
+    // Timeline Events
+    if (Array.isArray(activeDossier.chronologicalEvolution)) {
+      activeDossier.chronologicalEvolution.forEach((ev) => {
+        extractFromText(ev.description, "Évolution Chronologique");
+      });
+    }
+
+    // Comparative Jurisdictions
+    if (Array.isArray(activeDossier.comparativeJurisdictions)) {
+      activeDossier.comparativeJurisdictions.forEach((cp) => {
+        extractFromText(cp.regulatoryFramework, "Droit Comparé — Cadres");
+        extractFromText(cp.fundamentalPhilosophy, "Droit Comparé — Philosophies");
+        extractFromText(cp.modernFriction, "Droit Comparé — Conflits");
+      });
+    }
+
+    // Extract from Chat history
+    chatMessages.forEach((msg) => {
+      if (msg.sender !== "user") {
+        extractFromText(msg.text, "Dialogue LynoChat");
+      }
+    });
+
+    return Array.from(linksMap.values());
+  }, [activeDossier, chatMessages]);
 
   // Tour de rôle des légendes de chargement pour l'attention académique
   const readingCaptions = [
@@ -160,7 +313,7 @@ export default function App() {
       const response = await fetch("/api/generate-dossier", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ topic: trimmed })
+        body: JSON.stringify({ topic: trimmed, afnorMode })
       });
 
       if (!response.ok) {
@@ -220,7 +373,8 @@ export default function App() {
           topic: activeDossier.topic,
           query: queryText,
           dossierContext: activeDossier,
-          chatHistory: chatMessages.slice(-6)
+          chatHistory: chatMessages.slice(-6),
+          afnorMode
         })
       });
 
@@ -404,7 +558,8 @@ Formulez des solutions pratiques et de recherche (évaluation des risques de con
           topic: activeDossier.topic,
           query: simulationPrompt,
           dossierContext: activeDossier,
-          chatHistory: [] // independent clean state
+          chatHistory: [], // independent clean state
+          afnorMode
         })
       });
 
@@ -1030,7 +1185,7 @@ ${activeDossier.academicSyntheses}
                               DEMANDEUR // LES RETENSIONS DE DROIT
                             </span>
                             <p className="font-serif italic leading-relaxed text-zinc-800 text-[12px] whitespace-pre-wrap">
-                              {simulationResult.demandeur || "Analyse en attente..."}
+                              <TextWithLinks text={simulationResult.demandeur || "Analyse en attente..."} />
                             </p>
                           </div>
 
@@ -1040,7 +1195,7 @@ ${activeDossier.academicSyntheses}
                               DÉFENDEUR // LES MOYENS EN RÉPLIQUE
                             </span>
                             <p className="font-serif italic leading-relaxed text-zinc-800 text-[12px] whitespace-pre-wrap">
-                              {simulationResult.defendeur || "Analyse en attente..."}
+                              <TextWithLinks text={simulationResult.defendeur || "Analyse en attente..."} />
                             </p>
                           </div>
                         </div>
@@ -1058,7 +1213,7 @@ ${activeDossier.academicSyntheses}
                           </div>
                           
                           <p className="font-serif leading-relaxed text-[12.5px] italic text-[#141414] whitespace-pre-wrap">
-                            {simulationResult.decision || "Calcul de la décision souverraine en cours..."}
+                            <TextWithLinks text={simulationResult.decision || "Calcul de la décision souverraine en cours..."} />
                           </p>
 
                           <div className="border border-[#141414] p-3 bg-zinc-50 relative mt-4">
@@ -1066,7 +1221,7 @@ ${activeDossier.academicSyntheses}
                               Rappel des faits simulés :
                             </span>
                             <p className="font-serif text-[11px] text-zinc-650 italic">
-                              {simulationResult.situation}
+                              <TextWithLinks text={simulationResult.situation} />
                             </p>
                           </div>
                         </div>
@@ -1078,8 +1233,8 @@ ${activeDossier.academicSyntheses}
                             SUGGESTIONS ET CORRECTIFS STRATÉGIQUES ÉLABORÉS PAR L'IA
                           </span>
                           
-                          <div className="font-sans leading-relaxed text-zinc-805 text-[11px] whitespace-pre-wrap pl-1">
-                            {simulationResult.suggestions || "Aucune suggestion à afficher pour le moment."}
+                          <div className="font-sans leading-relaxed text-zinc-850 text-[11px] whitespace-pre-wrap pl-1">
+                            <TextWithLinks text={simulationResult.suggestions || "Aucune suggestion à afficher pour le moment."} />
                           </div>
                         </div>
                       )}
@@ -1182,13 +1337,25 @@ ${activeDossier.academicSyntheses}
                         }`}
                       >
                         <div
-                          className={`p-3 text-[11px] font-mono leading-relaxed text-left max-w-full ${
-                            msg.sender === "user"
-                              ? "bg-[#141414] text-white rounded-none border border-[#141414]"
-                              : "bg-[#F4F3F0] text-[#141414] border border-[#141414] rounded-none font-serif italic"
+                          style={
+                            afnorMode && msg.sender !== "user"
+                              ? {
+                                  fontFamily: "'Times New Roman', Times, serif",
+                                  textAlign: "justify",
+                                  lineHeight: "1.65",
+                                  fontSize: "12.5px"
+                                }
+                              : {}
+                          }
+                          className={`p-3 max-w-full ${
+                            afnorMode && msg.sender !== "user"
+                              ? "bg-zinc-50 text-[#141414] border border-[#141414] rounded-none p-4"
+                              : msg.sender === "user"
+                              ? "bg-[#141414] text-white rounded-none border border-[#141414] font-mono leading-relaxed text-left text-[11px]"
+                              : "bg-[#F4F3F0] text-[#141414] border border-[#141414] rounded-none font-serif italic leading-relaxed text-left text-[11px]"
                           }`}
                         >
-                          <p className="whitespace-pre-wrap">{msg.text}</p>
+                          <p className="whitespace-pre-wrap"><TextWithLinks text={msg.text} afnorMode={afnorMode} /></p>
                         </div>
                         <span className="text-[8px] font-mono uppercase tracking-wider opacity-60">
                           {msg.sender === "user" ? "Candidat (Vous)" : "Directeur LynoChat"} • {msg.timestamp}
@@ -1287,7 +1454,8 @@ ${activeDossier.academicSyntheses}
                   { id: "timeline", label: "Évolution Chronologique" },
                   { id: "empirical", label: "Analyses Empiriques" },
                   { id: "comparative", label: "Droit Comparé" },
-                  { id: "emerging", label: "Axes & Hypothèses" }
+                  { id: "emerging", label: "Axes & Hypothèses" },
+                  { id: "sources", label: "📚 Sources & Réf" }
                 ].map((tab) => {
                   return (
                     <button
@@ -1351,11 +1519,29 @@ ${activeDossier.academicSyntheses}
                         <BookOpen className="w-5 h-5 opacity-70" />
                       </div>
 
-                      {/* Georgia-italic styled block quotes matching original aesthetic design brief */}
-                      <div className="font-serif text-[#141414] text-[13.5px] leading-relaxed italic border-l-2 border-[#141414] pl-4 py-1 space-y-4">
+                      {/* Georgia-italic styled block quotes matching original aesthetic design brief or AFNOR standard styling */}
+                      <div className={`pl-4 py-1 space-y-4 ${
+                        afnorMode
+                          ? "border-l-4 border-emerald-700 bg-zinc-50/50 p-4"
+                          : "font-serif text-[#141414] text-[13.5px] leading-relaxed italic border-l-2 border-[#141414]"
+                      }`}>
                         {activeDossier.jurisprudentialNexus.split('\n\n').map((para, pIdx) => (
-                          <p key={pIdx}>
-                            {para}
+                          <p
+                            key={pIdx}
+                            style={
+                              afnorMode
+                                ? {
+                                    fontFamily: "'Times New Roman', Times, serif",
+                                    textAlign: "justify",
+                                    textIndent: "1.5cm",
+                                    lineHeight: "1.75",
+                                    fontSize: "14px"
+                                  }
+                                : {}
+                            }
+                            className={afnorMode ? "text-[#141414] leading-relaxed" : ""}
+                          >
+                            <TextWithLinks text={para} afnorMode={afnorMode} />
                           </p>
                         ))}
                       </div>
@@ -1366,11 +1552,27 @@ ${activeDossier.academicSyntheses}
                       <div className="flex items-center gap-2 text-[#141414] border-b border-[#141414]/10 pb-1.5">
                         <Layers className="w-4.5 h-4.5" />
                         <h4 className="font-mono text-xs uppercase tracking-widest font-bold">
-                          Directives Méthodologiques de Recherche de Thèse
+                          Directives Méthodologiques de Recherche de Thèse {afnorMode && "(Norme AFNOR NF Z 44-005)"}
                         </h4>
                       </div>
-                      <div className="font-sans text-[11.5px] text-[#141414] leading-relaxed text-left whitespace-pre-line pl-1 opacity-90">
-                        {activeDossier.academicSyntheses}
+                      <div
+                        style={
+                          afnorMode
+                            ? {
+                                fontFamily: "'Times New Roman', Times, serif",
+                                textAlign: "justify",
+                                lineHeight: "1.63",
+                                fontSize: "13.5px"
+                              }
+                            : {}
+                        }
+                        className={
+                          afnorMode
+                            ? "text-[#141414] whitespace-pre-line text-left pl-1"
+                            : "font-sans text-[11.5px] text-[#141414] leading-relaxed text-left whitespace-pre-line pl-1 opacity-90"
+                        }
+                      >
+                        <TextWithLinks text={activeDossier.academicSyntheses} afnorMode={afnorMode} />
                       </div>
                     </div>
                   </div>
@@ -1434,13 +1636,13 @@ ${activeDossier.academicSyntheses}
                                   {point.pillar}
                                 </td>
                                 <td className="py-3 px-4 text-[#141414] opacity-90 leading-relaxed align-top whitespace-pre-line border-r border-[#141414] text-[11px]">
-                                  {point.conflict}
+                                  <TextWithLinks text={point.conflict} afnorMode={afnorMode} />
                                 </td>
                                 <td className="py-3 px-4 font-serif text-[11px] text-[#141414] font-semibold align-top italic border-r border-[#141414]">
-                                  {point.precedent}
+                                  <TextWithLinks text={point.precedent} afnorMode={afnorMode} />
                                 </td>
                                 <td className="py-3 px-4 text-[#141414] opacity-80 leading-relaxed text-[10.5px] align-top font-serif bg-[#E4E3E0]/5">
-                                  {point.critique}
+                                  <TextWithLinks text={point.critique} afnorMode={afnorMode} />
                                 </td>
                               </tr>
                             ))
@@ -1489,8 +1691,20 @@ ${activeDossier.academicSyntheses}
                               </span>
                             </div>
 
-                            <p className="text-zinc-700 font-serif text-[11.5px] mt-2.5 leading-relaxed italic opacity-95">
-                              {event.description}
+                            <p
+                              style={
+                                afnorMode
+                                  ? {
+                                      fontFamily: "'Times New Roman', Times, serif",
+                                      textAlign: "justify",
+                                      lineHeight: "1.6",
+                                      fontSize: "13.2px"
+                                    }
+                                  : {}
+                              }
+                              className={afnorMode ? "text-zinc-800 mt-2.5" : "text-zinc-700 font-serif text-[11.5px] mt-2.5 leading-relaxed italic opacity-95"}
+                            >
+                              <TextWithLinks text={event.description} afnorMode={afnorMode} />
                             </p>
                           </div>
                         </div>
@@ -1706,7 +1920,7 @@ ${activeDossier.academicSyntheses}
                                 STRUCTURATION TEXTUELLE
                               </span>
                               <p className="text-[#141414] font-serif leading-relaxed italic text-[11px]">
-                                {comp.regulatoryFramework}
+                                <TextWithLinks text={comp.regulatoryFramework} afnorMode={afnorMode} />
                               </p>
                             </div>
 
@@ -1715,7 +1929,7 @@ ${activeDossier.academicSyntheses}
                                 TRADITION PHILOSOPHIQUE
                               </span>
                               <p className="text-zinc-700 leading-relaxed font-sans text-[11px] opacity-90">
-                                {comp.fundamentalPhilosophy}
+                                <TextWithLinks text={comp.fundamentalPhilosophy} afnorMode={afnorMode} />
                               </p>
                             </div>
 
@@ -1724,7 +1938,7 @@ ${activeDossier.academicSyntheses}
                                 POINT DE FRICTION RÉGLEMENTAIRE
                               </span>
                               <p className="text-[#141414] leading-relaxed font-sans font-semibold text-[11px]">
-                                {comp.modernFriction}
+                                <TextWithLinks text={comp.modernFriction} afnorMode={afnorMode} />
                               </p>
                             </div>
                           </div>
@@ -1777,7 +1991,7 @@ ${activeDossier.academicSyntheses}
                                 Projet de Proposition de Thèse du Doctorat (Ph.D) :
                               </span>
                               <p className="text-zinc-800 text-[11px] leading-relaxed font-serif italic">
-                                &ldquo;{point.scholarlyThesis}&rdquo;
+                                &ldquo;<TextWithLinks text={point.scholarlyThesis} afnorMode={afnorMode} />&rdquo;
                               </p>
                             </div>
 
@@ -1786,7 +2000,7 @@ ${activeDossier.academicSyntheses}
                               <span className="font-bold uppercase tracking-wider block text-zinc-500">
                                 [SCÉNARIO CONTENTIEUX HYPOTHÉTIQUE]
                               </span>
-                              <p className="leading-normal">{point.hypotheticalScenario}</p>
+                              <p className="leading-normal"><TextWithLinks text={point.hypotheticalScenario} afnorMode={afnorMode} /></p>
                             </div>
                           </div>
 
@@ -1807,6 +2021,75 @@ ${activeDossier.academicSyntheses}
                   </div>
                 )}
 
+                {/* 7. ALL EXTRACTED SOURCES / REFERENCES */}
+                {activeTab === "sources" && (
+                  <div className="space-y-6 flex-1 flex flex-col justify-between">
+                    <div className="pb-3 border-b border-[#141414]/15 flex items-center justify-between col-span-full">
+                      <div>
+                        <span className="text-[9px] uppercase tracking-widest font-mono text-zinc-405 font-bold block">
+                          Spécification Analytique VII
+                        </span>
+                        <h3 style={{ fontFamily: "Georgia, serif" }} className="font-serif text-lg font-bold text-[#141414] mt-1 italic">
+                          Index des Sources & Références Documentaires en Ligne
+                        </h3>
+                      </div>
+                      <BookMarked className="w-5 h-5 text-[#8b5cf6] opacity-85 shrink-0" />
+                    </div>
+
+                    <div className="space-y-4">
+                      <p className="text-xs text-zinc-650 leading-relaxed font-serif italic text-left">
+                        Cet index consolide dynamiquement l'intégralité des références d'autorité doctrinale de la Sorbonne, d'Oxford et de Stanford ainsi que de Légifrance, EUR-Lex et Google Scholar identifiées au travers de vos dossiers générés et de vos échanges sur LynoChat. Vous pouvez cliquer sur n'importe quel lien pour l'ouvrir directement dans un nouvel onglet.
+                      </p>
+
+                      {extractedLinks.length === 0 ? (
+                        <div className="text-center py-12 bg-zinc-50 border border-[#141414]/15 p-6 font-mono text-[11px] text-[#141414] rounded-none">
+                          <div className="font-bold uppercase tracking-wider mb-2 text-zinc-400">Aucun lien d'autorité détecté pour le moment</div>
+                          <span className="text-[10px] text-zinc-500 bg-[#E4E3E0]/40 px-2 py-1 uppercase font-bold border border-[#141414]/10">
+                            Générez un dossier ou posez une question au Directeur de recherche sur LynoChat pour voir l'index se construire.
+                          </span>
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          {extractedLinks.map((link, idx) => (
+                            <div
+                              key={idx}
+                              className="border border-[#141414] bg-white p-4 text-left flex flex-col justify-between hover:border-[#7c3aed] hover:shadow-[3px_3px_0px_rgba(124,92,246,0.1)] transition-all rounded-none"
+                            >
+                              <div className="space-y-1">
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="text-[8px] font-mono px-2 py-0.5 uppercase tracking-widest bg-purple-50 text-[#7c3aed] border border-purple-200 font-bold">
+                                    {link.category}
+                                  </span>
+                                  <span className="text-[8px] font-mono text-zinc-400 shrink-0">
+                                    Occurrences : {link.count}
+                                  </span>
+                                </div>
+                                <h4 style={{ fontFamily: "Georgia, serif" }} className="font-serif text-[12.5px] font-bold text-[#141414] leading-snug pt-1">
+                                  {link.label}
+                                </h4>
+                                <p className="text-[9.5px] text-zinc-500 font-mono truncate select-all" title={link.url}>
+                                  {link.url}
+                                </p>
+                              </div>
+                              <div className="mt-4 pt-3 border-t border-zinc-100 flex justify-end">
+                                <a
+                                  href={link.url}
+                                  target="_blank"
+                                  referrerPolicy="no-referrer"
+                                  rel="noopener noreferrer"
+                                  className="px-3 py-1.5 font-mono text-[9px] uppercase tracking-widest font-extrabold cursor-pointer transition bg-[#7c3aed] hover:bg-[#5b21b6] text-white flex items-center gap-1.5"
+                                >
+                                  Consulter la source <ExternalLink className="w-3 h-3 stroke-[2.5]" />
+                                </a>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
                 {/* Aesthetic footer corner watermark inside workstation */}
                 <div className="absolute bottom-2 right-4 font-mono text-[8px] text-[#141414] opacity-35 pointer-events-none select-none uppercase tracking-wider mr-1">
                   Signature contextuelle du nœud : Coalition Sorbonne-Oxford-Stanford
@@ -1819,6 +2102,47 @@ ${activeDossier.academicSyntheses}
           </div>
           </div>
         )}
+
+        {/* Dynamic Formatting Standard Selection Panel at the bottom */}
+        <div className="bg-white border border-[#141414] p-5 mt-2 flex flex-col md:flex-row items-center justify-between gap-4 rounded-none text-left">
+          <div className="space-y-1 flex-1">
+            <div className="flex items-center gap-2">
+              <span className={`w-2.5 h-2.5 rounded-full ${afnorMode ? "bg-emerald-600 animate-pulse" : "bg-[#141414]"}`} />
+              <span className="text-[10px] font-mono font-bold uppercase tracking-widest text-[#141414]">
+                Moteur de Standardisation Académique du Contenu
+              </span>
+            </div>
+            <p className="text-[11.5px] font-serif text-zinc-700 leading-relaxed italic">
+              {afnorMode 
+                ? "NORME AFNOR NF Z 44-005 ACQUITTÉE : Les mémoires de recherche, les citations doctrinales d'autorité, les chronologies jurisprudentielles, les simulations de cas pratiques et les suggestions d'IA sont rédigés selon les règles strictes de mise en page académique française (justification, interligne étendu 1.5, retrait d'alinéa systématique de 1cm, et structure bibliographique normalisée)."
+                : "MODE STANDARD DE PRÉVISUALISATION : Mise en page web optimisée pour une lecture fluide et réactive à l'écran."
+              }
+            </p>
+          </div>
+          <div className="flex items-center gap-1.5 bg-[#E4E3E0] p-1.5 border border-[#141414] shrink-0">
+            <button
+              onClick={() => toggleAfnorMode(false)}
+              className={`px-3 py-1.5 font-mono text-[9px] uppercase tracking-widest font-extrabold cursor-pointer transition ${
+                !afnorMode
+                  ? "bg-[#141414] text-white"
+                  : "bg-white text-[#141414] border border-[#141414]/15 hover:bg-[#F2F1EE]"
+              }`}
+            >
+              Normal Way
+            </button>
+            <button
+              onClick={() => toggleAfnorMode(true)}
+              className={`px-3 py-1.5 font-mono text-[9px] uppercase tracking-widest font-extrabold cursor-pointer transition flex items-center gap-1.5 ${
+                afnorMode
+                  ? "bg-emerald-700 text-white animate-fade-in"
+                  : "bg-white text-[#141414] border border-[#141414]/30 hover:bg-[#F2F1EE]"
+              }`}
+            >
+              <CheckCircle2 className={`w-3.5 h-3.5 ${afnorMode ? "text-white" : "text-zinc-400"}`} />
+              Norme AFNOR
+            </button>
+          </div>
+        </div>
 
       </main>
 
